@@ -4,7 +4,7 @@ WORKDIR /app
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg libsndfile1 git \
+    ffmpeg libsndfile1 git build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps
