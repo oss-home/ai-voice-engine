@@ -1,0 +1,18 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+*.pt
+*.bin
+*.safetensors
+models/
+voices/*/reference.mp3
+voices/*/reference.wav
+# keep the directory but not the actual audio files (large binaries)
+!voices/.gitkeep
+!voices/ahana/.gitkeep

@@ -1,0 +1,70 @@
+version: "3.9"
+
+services:
+
+  stt-server:
+    build:
+      context: ./stt-server
+      dockerfile: Dockerfile
+    image: ai-voice-stt:latest
+    container_name: ai-voice-stt
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    volumes:
+      - stt_models:/app/models
+    environment:
+      STT_DEVICE: cuda
+      STT_MODEL_SIZE: large-v3        # best quality — change to distil-large-v3 for faster/cheaper
+      STT_COMPUTE_TYPE: float16
+      STT_LANGUAGE: en                # "en" | "hi" | "multi"
+      STT_BEAM_SIZE: 5
+      STT_VAD_THRESHOLD: 0.5
+      STT_SILENCE_MS: 300
+      STT_PARTIAL_INTERVAL_MS: 400
+      STT_API_TOKEN: ${STT_API_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  tts-server:
+    build:
+      context: ./tts-server
+      dockerfile: Dockerfile
+    image: ai-voice-tts:latest
+    container_name: ai-voice-tts
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./voices:/app/voices:ro
+    environment:
+      TTS_DEVICE: cuda
+      TTS_DEFAULT_VOICE: ahana
+      TTS_API_TOKEN: ${TTS_API_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s   # model load takes ~60s on first start
+
+volumes:
+  stt_models:
