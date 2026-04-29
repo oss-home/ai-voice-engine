@@ -79,9 +79,9 @@ class VoiceModel:
         """
         Load reference audio, skip the first _REF_SKIP_SECS, then take
         _REF_TARGET_SECS of the cleanest speech found (highest RMS).
-        Saves a 16 kHz mono WAV next to the original for Chatterbox.
+        Saves a 16 kHz mono WAV to /tmp (always writable, even with read-only voice mounts).
         """
-        out_path = str(Path(src_path).parent / "reference_trimmed.wav")
+        out_path = f"/tmp/{voice_id}_reference_trimmed.wav"
 
         try:
             wav, sr = torchaudio.load(src_path)
