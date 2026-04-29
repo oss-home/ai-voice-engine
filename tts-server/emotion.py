@@ -46,24 +46,27 @@ from typing import Union
 # Tuned for Indian conversational voice:
 #   exaggeration: 0.0 (flat/robotic) → 2.0 (very dramatic)
 #   cfg_weight:   0.0 (creative/loose) → 1.0 (strict voice match)
-# Indian voice naturally sits warmer than Western neutral — baseline is ~0.55
+#
+# IMPORTANT: Keep exaggeration ≤ 1.0 for clean speech.
+# Values above 1.0 risk hallucination noise in Chatterbox.
+# Indian voice naturally sits warmer — baseline is ~0.50
 
 EMOTION_PROFILES: dict[str, dict[str, float]] = {
-    "neutral":      {"exaggeration": 0.55, "cfg_weight": 0.50},  # warm neutral
-    "warm":         {"exaggeration": 0.85, "cfg_weight": 0.45},  # friendly, open
-    "excited":      {"exaggeration": 1.40, "cfg_weight": 0.25},  # energetic
-    "happy":        {"exaggeration": 1.15, "cfg_weight": 0.35},  # joyful, light
-    "empathy":      {"exaggeration": 0.28, "cfg_weight": 0.72},  # soft, caring
-    "concerned":    {"exaggeration": 0.35, "cfg_weight": 0.65},  # gentle worry
-    "professional": {"exaggeration": 0.18, "cfg_weight": 0.85},  # crisp, formal
-    "urgent":       {"exaggeration": 0.95, "cfg_weight": 0.35},  # pressing
-    "confident":    {"exaggeration": 0.78, "cfg_weight": 0.48},  # assured
-    "apologetic":   {"exaggeration": 0.22, "cfg_weight": 0.78},  # sincere apology
-    "curious":      {"exaggeration": 0.68, "cfg_weight": 0.45},  # interested
-    "reassuring":   {"exaggeration": 0.48, "cfg_weight": 0.62},  # calming
-    "enthusiastic": {"exaggeration": 1.55, "cfg_weight": 0.20},  # very animated
-    "gentle":       {"exaggeration": 0.12, "cfg_weight": 0.88},  # very soft
-    "sad":          {"exaggeration": 0.18, "cfg_weight": 0.82},  # subdued
+    "neutral":      {"exaggeration": 0.40, "cfg_weight": 0.55},
+    "warm":         {"exaggeration": 0.60, "cfg_weight": 0.50},
+    "excited":      {"exaggeration": 0.90, "cfg_weight": 0.35},
+    "happy":        {"exaggeration": 0.75, "cfg_weight": 0.40},
+    "empathy":      {"exaggeration": 0.22, "cfg_weight": 0.75},
+    "concerned":    {"exaggeration": 0.28, "cfg_weight": 0.68},
+    "professional": {"exaggeration": 0.15, "cfg_weight": 0.88},
+    "urgent":       {"exaggeration": 0.72, "cfg_weight": 0.40},
+    "confident":    {"exaggeration": 0.58, "cfg_weight": 0.52},
+    "apologetic":   {"exaggeration": 0.18, "cfg_weight": 0.82},
+    "curious":      {"exaggeration": 0.48, "cfg_weight": 0.52},
+    "reassuring":   {"exaggeration": 0.35, "cfg_weight": 0.65},
+    "enthusiastic": {"exaggeration": 1.00, "cfg_weight": 0.28},
+    "gentle":       {"exaggeration": 0.10, "cfg_weight": 0.90},
+    "sad":          {"exaggeration": 0.15, "cfg_weight": 0.85},
 }
 
 _DEFAULT_EMOTION = "warm"  # Indian conversational default — warmer than "neutral"

@@ -111,17 +111,25 @@ class VoiceModel:
                 # Shorter than target — use from skip to end
                 trimmed = wav[:, skip:]
             else:
-                # Find the best window: highest RMS energy = most active speech
-                best_start = skip
-                best_rms   = -1.0
-                step = sr // 2   # search every 0.5 s
+                # Find the most CONSISTENT window (RMS closest to median).
+                # Avoids selecting loud/dramatic sections that confuse cloning.
+                step = sr // 2   # sample every 0.5 s
+                windows: list[tuple[int, float]] = []
                 for s in range(skip, wav.shape[-1] - want, step):
                     chunk = wav[:, s : s + want]
                     rms   = float(chunk.pow(2).mean().sqrt())
-                    if rms > best_rms:
-                        best_rms   = rms
-                        best_start = s
+                    windows.append((s, rms))
+                if windows:
+                    sorted_rms = sorted(w[1] for w in windows)
+                    median_rms = sorted_rms[len(sorted_rms) // 2]
+                    best_start = min(windows, key=lambda w: abs(w[1] - median_rms))[0]
+                else:
+                    best_start = skip
                 trimmed = wav[:, best_start : best_start + want]
+                logger.info(
+                    f"  [{voice_id}] reference window: "
+                    f"{best_start/sr:.1f}s – {(best_start+want)/sr:.1f}s"
+                )
 
             # Normalize to -20 dBFS for consistent voice cloning
             rms = trimmed.pow(2).mean().sqrt().clamp(min=1e-8)
@@ -145,18 +153,19 @@ class VoiceModel:
 
     # (text_prompt, exaggeration, cfg_weight)
     # Designed to produce natural paralinguistic sounds in the cloned voice.
+    # NOTE: Keep exaggeration ≤ 1.0 — higher values cause hallucination noise.
     _AUDIO_EVENT_SPECS: dict[str, tuple[str, float, float]] = {
         "breath":       ("Mm.",           0.08, 0.92),  # short inhale
         "breath_deep":  ("Mmm.",          0.12, 0.90),  # deep inhale
-        "hmm":          ("Hmm.",          0.45, 0.65),  # quick thinking
-        "hmm_long":     ("Hmmm.",         0.50, 0.60),  # longer thinking
+        "hmm":          ("Hmm.",          0.40, 0.65),  # quick thinking
+        "hmm_long":     ("Hmmm.",         0.45, 0.62),  # longer thinking
         "sigh":         ("Haah.",         0.18, 0.85),  # gentle sigh
         "sigh_deep":    ("Haaaah.",       0.22, 0.82),  # deep emotional sigh
-        "laugh_soft":   ("Hehe.",         1.55, 0.22),  # soft giggle
-        "laugh_full":   ("Ha ha ha ha!",  1.82, 0.18),  # genuine laugh
-        "um":           ("Um,",           0.42, 0.68),  # hesitation um
-        "uh":           ("Uh,",           0.38, 0.70),  # hesitation uh
-        "oh":           ("Oh!",           0.95, 0.38),  # realisation / surprise
+        "laugh_soft":   ("Hehe.",         0.80, 0.40),  # soft giggle
+        "laugh_full":   ("Ha ha ha ha!",  1.00, 0.30),  # genuine laugh
+        "um":           ("Um,",           0.38, 0.70),  # hesitation um
+        "uh":           ("Uh,",           0.35, 0.72),  # hesitation uh
+        "oh":           ("Oh!",           0.75, 0.42),  # realisation / surprise
     }
 
     async def _prebuild_events(self, voice_id: str) -> None:
