@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
 
   stt-server:
@@ -48,10 +46,12 @@ services:
       - "8002:8002"
     volumes:
       - ./voices:/app/voices:ro
+      - /tmp:/tmp                   # writable scratch for trimmed reference WAVs
     environment:
       TTS_DEVICE: cuda
       TTS_DEFAULT_VOICE: ahana
       TTS_API_TOKEN: ${TTS_API_TOKEN:-}
+    shm_size: "2gb"                 # shared memory for GPU tensor operations
     deploy:
       resources:
         reservations:

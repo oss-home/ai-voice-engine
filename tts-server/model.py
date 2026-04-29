@@ -3,11 +3,12 @@ Chatterbox TTS model wrapper.
 
 Responsibilities:
   - Load Chatterbox once at startup (GPU / CPU)
-  - Auto-trim reference audio to the best 25-second segment for voice cloning
+  - Auto-trim reference audio to the most consistent 25-second segment
   - Manage per-voice reference audio paths
   - Pre-generate all audio events (breath, laugh, sigh, um, oh…) in the
     cloned voice so live calls have zero warm-up latency
   - Synthesize text with per-segment emotion parameters
+  - Provide high-quality (22 kHz) synthesis for preview/testing
 """
 
 from __future__ import annotations
@@ -16,18 +17,25 @@ import asyncio
 import concurrent.futures
 from pathlib import Path
 
+import numpy as np
 import torch
 import torchaudio
 from loguru import logger
 
-from audio_utils import pcm_to_frames, resample_to_pstn, silence_frames
+from audio_utils import (
+    HQ_SAMPLE_RATE,
+    build_wav_bytes,
+    pcm_to_frames,
+    resample_to_hq,
+    resample_to_pstn,
+    silence_frames,
+)
 from emotion import EMOTION_PROFILES
 
 # Thread pool — Chatterbox inference is CPU/GPU bound, not async-native.
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 # Ideal reference duration for voice cloning (seconds).
-# Too short → poor voice match. Too long → slow and sometimes unstable.
 _REF_TARGET_SECS = 25
 _REF_SKIP_SECS   = 20   # skip the first N seconds (often intro / silence)
 
@@ -39,7 +47,7 @@ class VoiceModel:
         self.device = device
         self.voices_dir = Path(voices_dir)
         self._model = None
-        self._voice_paths: dict[str, str]       = {}   # voice_id → trimmed wav path
+        self._voice_paths: dict[str, str]        = {}   # voice_id → trimmed wav path
         self._event_cache: dict[str, list[bytes]] = {}  # "voice:event" → PCM frames
 
     # ── startup ──────────────────────────────────────────────────────────────
@@ -52,7 +60,6 @@ class VoiceModel:
 
         self._discover_voices()
 
-        # Pre-generate audio events for every voice found.
         for voice_id in list(self._voice_paths):
             await self._prebuild_events(voice_id)
 
@@ -77,14 +84,17 @@ class VoiceModel:
 
     def _prepare_reference(self, voice_id: str, src_path: str) -> str:
         """
-        Load reference audio, skip the first _REF_SKIP_SECS, then take
-        _REF_TARGET_SECS of the cleanest speech found (highest RMS).
-        Saves a 16 kHz mono WAV to /tmp (always writable, even with read-only voice mounts).
+        Load reference audio, skip the first _REF_SKIP_SECS, then find
+        the most CONSISTENT 25-second window (RMS closest to median).
+        Consistent speech = best voice cloning; avoids loud/dramatic sections
+        that introduce hallucination noise in Chatterbox.
+        Saves a 16 kHz mono WAV to /tmp (always writable).
         """
         out_path = f"/tmp/{voice_id}_reference_trimmed.wav"
 
         try:
             wav, sr = torchaudio.load(src_path)
+
             # Convert to mono
             if wav.shape[0] > 1:
                 wav = wav.mean(dim=0, keepdim=True)
@@ -96,35 +106,34 @@ class VoiceModel:
                 sr = 16000
 
             total_secs = wav.shape[-1] / sr
-            logger.info(
-                f"  [{voice_id}] reference audio: {total_secs:.1f}s total"
-            )
+            logger.info(f"  [{voice_id}] reference audio: {total_secs:.1f}s total")
 
             skip  = int(min(_REF_SKIP_SECS, total_secs * 0.15) * sr)
             want  = int(_REF_TARGET_SECS * sr)
             avail = wav.shape[-1] - skip
 
             if avail <= 0:
-                # Very short clip — use all of it
                 trimmed = wav
             elif avail <= want:
-                # Shorter than target — use from skip to end
                 trimmed = wav[:, skip:]
             else:
-                # Find the most CONSISTENT window (RMS closest to median).
-                # Avoids selecting loud/dramatic sections that confuse cloning.
-                step = sr // 2   # sample every 0.5 s
+                # Sample every 0.5 s and record RMS for each candidate window
+                step = sr // 2
                 windows: list[tuple[int, float]] = []
                 for s in range(skip, wav.shape[-1] - want, step):
                     chunk = wav[:, s : s + want]
                     rms   = float(chunk.pow(2).mean().sqrt())
                     windows.append((s, rms))
+
                 if windows:
+                    # Pick the window whose RMS is closest to the median —
+                    # this selects the most average/steady speech segment.
                     sorted_rms = sorted(w[1] for w in windows)
                     median_rms = sorted_rms[len(sorted_rms) // 2]
                     best_start = min(windows, key=lambda w: abs(w[1] - median_rms))[0]
                 else:
                     best_start = skip
+
                 trimmed = wav[:, best_start : best_start + want]
                 logger.info(
                     f"  [{voice_id}] reference window: "
@@ -139,7 +148,8 @@ class VoiceModel:
 
             torchaudio.save(out_path, trimmed, sr)
             logger.info(
-                f"  [{voice_id}] trimmed reference: {trimmed.shape[-1]/sr:.1f}s → {out_path}"
+                f"  [{voice_id}] trimmed reference: "
+                f"{trimmed.shape[-1]/sr:.1f}s → {out_path}"
             )
             return out_path
 
@@ -152,7 +162,6 @@ class VoiceModel:
     # ── audio-event pre-generation ───────────────────────────────────────────
 
     # (text_prompt, exaggeration, cfg_weight)
-    # Designed to produce natural paralinguistic sounds in the cloned voice.
     # NOTE: Keep exaggeration ≤ 1.0 — higher values cause hallucination noise.
     _AUDIO_EVENT_SPECS: dict[str, tuple[str, float, float]] = {
         "breath":       ("Mm.",           0.08, 0.92),  # short inhale
@@ -170,7 +179,9 @@ class VoiceModel:
 
     async def _prebuild_events(self, voice_id: str) -> None:
         """Pre-generate all audio events in the cloned voice at startup."""
-        logger.info(f"Pre-building {len(self._AUDIO_EVENT_SPECS)} audio events for '{voice_id}' …")
+        logger.info(
+            f"Pre-building {len(self._AUDIO_EVENT_SPECS)} audio events for '{voice_id}' …"
+        )
         ref  = self._voice_paths[voice_id]
         loop = asyncio.get_running_loop()
 
@@ -196,6 +207,7 @@ class VoiceModel:
         exaggeration: float,
         cfg_weight: float,
     ) -> list[bytes]:
+        """Synthesize text and return 8 kHz PCM16 frames (PSTN / phone quality)."""
         wav: torch.Tensor = self._model.generate(
             text=text,
             audio_prompt_path=ref_audio,
@@ -205,13 +217,30 @@ class VoiceModel:
         pcm = resample_to_pstn(wav)
         return pcm_to_frames(pcm)
 
+    def _synth_raw_hq(
+        self,
+        text: str,
+        ref_audio: str,
+        exaggeration: float,
+        cfg_weight: float,
+    ) -> np.ndarray:
+        """Synthesize text and return 22 kHz PCM16 (high quality, for preview)."""
+        wav: torch.Tensor = self._model.generate(
+            text=text,
+            audio_prompt_path=ref_audio,
+            exaggeration=float(exaggeration),
+            cfg_weight=float(cfg_weight),
+        )
+        return resample_to_hq(wav, target_sr=HQ_SAMPLE_RATE)
+
     async def synthesize(
         self,
         text: str,
         voice_id: str,
-        exaggeration: float = 0.55,
+        exaggeration: float = 0.60,
         cfg_weight: float   = 0.50,
     ) -> list[bytes]:
+        """Async synthesis → 8 kHz PCM16 frames for phone calls."""
         if not text.strip():
             return []
         ref = self._voice_paths.get(voice_id)
@@ -220,6 +249,24 @@ class VoiceModel:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             _executor, self._synth_raw, text, ref, exaggeration, cfg_weight
+        )
+
+    async def synthesize_hq(
+        self,
+        text: str,
+        voice_id: str,
+        exaggeration: float = 0.60,
+        cfg_weight: float   = 0.50,
+    ) -> np.ndarray:
+        """Async synthesis → 22 kHz PCM16 numpy array for preview/testing."""
+        if not text.strip():
+            return np.array([], dtype=np.int16)
+        ref = self._voice_paths.get(voice_id)
+        if not ref:
+            raise ValueError(f"Voice not found: {voice_id!r}")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            _executor, self._synth_raw_hq, text, ref, exaggeration, cfg_weight
         )
 
     def get_event(self, kind: str, voice_id: str) -> list[bytes]:
