@@ -1,10 +1,9 @@
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
 
-# Kokoro-82M TTS (replaces chatterbox-tts)
-# Apache 2.0 — 23× faster than Chatterbox on T4 (RTF 0.034)
-kokoro>=0.9.2
-misaki[en]>=0.9.2   # Kokoro's English phonemizer
+# F5-TTS — zero-shot voice cloning with Indian accent preservation
+# Replaces Kokoro-82M (Kokoro copies timbre only; F5-TTS preserves accent)
+f5-tts>=1.0.0
 
 # PyTorch / audio
 torch>=2.4.0
