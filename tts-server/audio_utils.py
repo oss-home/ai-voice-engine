@@ -2,15 +2,20 @@
 PCM conversion, frame utilities, and audio post-processing.
 
 Pipeline for every synthesized segment:
-  Chatterbox 24 kHz tensor
+  Kokoro 24 kHz tensor / numpy array
     → resample to 8 kHz (PSTN) or 22 kHz (preview)
     → normalize loudness to -18 dBFS
     → apply 6 ms fade-in / fade-out  (eliminates click artifacts)
     → split into 320-byte frames
+
+Note: resample_to_pstn / resample_to_hq accept EITHER a torch.Tensor OR a
+numpy.ndarray so callers don't have to convert.  Kokoro outputs numpy float32;
+older code may pass torch tensors — both work.
 """
 from __future__ import annotations
 
 import struct
+from typing import Union
 
 import numpy as np
 import torch
@@ -27,8 +32,27 @@ HQ_SAMPLE_RATE = 22050
 # Loudness target for all output (telephony-safe)
 _TARGET_DBFS = -18.0
 
+# Type alias accepted by the resamplers
+AudioInput = Union[torch.Tensor, np.ndarray]
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _to_tensor(wav: AudioInput) -> torch.Tensor:
+    """
+    Convert numpy array or torch tensor → 2-D float32 torch tensor (1, N).
+    Values must be in [-1.0, 1.0].
+    """
+    if isinstance(wav, np.ndarray):
+        t = torch.from_numpy(wav.astype(np.float32))
+    else:
+        t = wav.float()
+    if t.dim() == 1:
+        t = t.unsqueeze(0)           # (N,) → (1, N)
+    if t.shape[0] > 1:
+        t = t.mean(dim=0, keepdim=True)   # stereo → mono
+    return t
+
 
 def apply_fade(pcm: np.ndarray, fade_ms: float = 6.0, sr: int | None = None) -> np.ndarray:
     """
@@ -79,18 +103,25 @@ def trim_silence(pcm: np.ndarray, threshold: float = 0.005, sr: int | None = Non
 
 # ── resamplers ────────────────────────────────────────────────────────────────
 
-def resample_to_pstn(wav: torch.Tensor) -> np.ndarray:
+def resample_to_pstn(
+    wav: AudioInput,
+    orig_freq: int | None = None,
+) -> np.ndarray:
     """
-    Chatterbox output (24 kHz) → 8 kHz PCM16 mono.
-    Applies loudness normalization + fade for clean concatenation.
+    Kokoro/any 24 kHz float audio → 8 kHz PCM16 mono.
+
+    wav:       torch.Tensor (1, N) or numpy.ndarray (N,) — float32, range [-1, 1]
+    orig_freq: source sample rate (default: settings.model_sample_rate = 24000)
+
+    Applies loudness normalisation + fade for clean concatenation.
     """
-    if wav.dim() == 1:
-        wav = wav.unsqueeze(0)
-    if wav.shape[0] > 1:
-        wav = wav.mean(dim=0, keepdim=True)
+    if orig_freq is None:
+        orig_freq = settings.model_sample_rate
+
+    t = _to_tensor(wav)
     resampled = torchaudio.functional.resample(
-        wav,
-        orig_freq=settings.model_sample_rate,
+        t,
+        orig_freq=orig_freq,
         new_freq=settings.output_sample_rate,
     )
     arr = np.clip(resampled.squeeze().cpu().numpy(), -1.0, 1.0)
@@ -101,20 +132,22 @@ def resample_to_pstn(wav: torch.Tensor) -> np.ndarray:
     return pcm
 
 
-def resample_to_hq(wav: torch.Tensor, target_sr: int = HQ_SAMPLE_RATE) -> np.ndarray:
+def resample_to_hq(
+    wav: AudioInput,
+    orig_freq: int | None = None,
+    target_sr: int = HQ_SAMPLE_RATE,
+) -> np.ndarray:
     """
-    Chatterbox output (24 kHz) → 22 kHz PCM16 mono for preview/quality testing.
-    Returns the full-quality signal without PSTN downgrade.
+    Kokoro/any 24 kHz float audio → 22 kHz PCM16 mono for preview/testing.
+
+    wav:       torch.Tensor (1, N) or numpy.ndarray (N,) — float32, range [-1, 1]
+    orig_freq: source sample rate (default: settings.model_sample_rate = 24000)
     """
-    if wav.dim() == 1:
-        wav = wav.unsqueeze(0)
-    if wav.shape[0] > 1:
-        wav = wav.mean(dim=0, keepdim=True)
-    resampled = torchaudio.functional.resample(
-        wav,
-        orig_freq=settings.model_sample_rate,
-        new_freq=target_sr,
-    )
+    if orig_freq is None:
+        orig_freq = settings.model_sample_rate
+
+    t = _to_tensor(wav)
+    resampled = torchaudio.functional.resample(t, orig_freq=orig_freq, new_freq=target_sr)
     arr = np.clip(resampled.squeeze().cpu().numpy(), -1.0, 1.0)
     pcm = (arr * 32767).astype(np.int16)
     pcm = normalize_pcm(pcm)
@@ -145,7 +178,7 @@ def silence_frames(duration_ms: int) -> list[bytes]:
 def build_wav_bytes(pcm: np.ndarray, sample_rate: int) -> bytes:
     """Pack a PCM16 mono numpy array into a complete WAV file (in memory)."""
     data = pcm.tobytes()
-    ds = len(data)
+    ds   = len(data)
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF", ds + 36, b"WAVE",

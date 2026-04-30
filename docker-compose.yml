@@ -64,7 +64,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s   # model load takes ~60s on first start
+      start_period: 60s    # Kokoro loads in ~20-30s (much faster than Chatterbox)
 
 volumes:
   stt_models:
