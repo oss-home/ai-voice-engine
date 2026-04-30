@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download F5-TTS model weights at build time so container starts instantly.
 # Uses CPU-only init to avoid needing GPU during docker build.
-RUN python3 -c "from f5_tts.api import F5TTS; F5TTS(model_type='F5TTS_v1_Base', device='cpu'); print('F5-TTS weights cached.')"
+RUN python3 -c "from f5_tts.api import F5TTS; F5TTS(device='cpu'); print('F5-TTS weights cached.')"
 
 # Application source
 COPY *.py ./

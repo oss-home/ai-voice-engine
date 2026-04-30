@@ -119,10 +119,7 @@ class VoiceModel:
             logger.warning("CUDA requested but not available -- falling back to CPU")
             device = "cpu"
 
-        tts = F5TTS(
-            model_type="F5TTS_v1_Base",
-            device=device,
-        )
+        tts = F5TTS(device=device)
         logger.info(f"  F5-TTS device: {device}")
         return tts
 
