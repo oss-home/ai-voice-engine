@@ -1,5 +1,8 @@
 """
-Emotion token parser — Indian conversational voice optimised.
+Emotion token parser — Indian conversational voice, Ahana character.
+
+Ahana's personality: confident, smooth, polished, warm, charming,
+expressive — like a charismatic radio host who genuinely cares.
 
 The LLM embeds these markers naturally in replies:
 
@@ -19,14 +22,16 @@ The LLM embeds these markers naturally in replies:
 
   Emotion switches (affect all text until next switch):
       [emotion:neutral]       calm, balanced
-      [emotion:warm]          friendly, approachable — default Indian conversational
+      [emotion:warm]          friendly, approachable — default
+      [emotion:charming]      confident, smooth, magnetic  ← new
+      [emotion:playful]       fun, light, teasing           ← new
       [emotion:excited]       high energy, enthusiastic
       [emotion:happy]         upbeat, light, joyful
       [emotion:empathy]       soft, caring, slower
       [emotion:concerned]     gentle worry
       [emotion:professional]  crisp, measured, formal
       [emotion:urgent]        faster, pressing
-      [emotion:confident]     assured, steady
+      [emotion:confident]     assured, smooth, polished
       [emotion:apologetic]    sincere, regretful
       [emotion:curious]       interested, engaged
       [emotion:reassuring]    calming, supportive
@@ -43,33 +48,34 @@ from typing import Union
 
 
 # ── emotion → Chatterbox params ──────────────────────────────────────────────
-# Tuned for Indian conversational voice:
-#   exaggeration: 0.0 (flat/robotic) → 2.0 (very dramatic)
-#   cfg_weight:   0.0 (creative/loose) → 1.0 (strict voice match)
+# exaggeration: 0.0 (flat) → 2.0 (very dramatic). Keep ≤ 1.0 for clean audio.
+# cfg_weight:   0.0 (creative) → 1.0 (strict voice match)
 #
-# IMPORTANT: Keep exaggeration ≤ 1.0 for clean speech.
-# Values above 1.0 risk hallucination noise in Chatterbox.
-# Indian voice naturally sits warmer — baseline is ~0.50
+# Ahana character baseline: warm + confident + smooth
+# Higher exaggeration = more expressive prosody
+# Lower cfg_weight = slightly more musical, less robotic
 
 EMOTION_PROFILES: dict[str, dict[str, float]] = {
-    "neutral":      {"exaggeration": 0.40, "cfg_weight": 0.55},
-    "warm":         {"exaggeration": 0.60, "cfg_weight": 0.50},
-    "excited":      {"exaggeration": 0.90, "cfg_weight": 0.35},
-    "happy":        {"exaggeration": 0.75, "cfg_weight": 0.40},
-    "empathy":      {"exaggeration": 0.22, "cfg_weight": 0.75},
-    "concerned":    {"exaggeration": 0.28, "cfg_weight": 0.68},
-    "professional": {"exaggeration": 0.15, "cfg_weight": 0.88},
-    "urgent":       {"exaggeration": 0.72, "cfg_weight": 0.40},
-    "confident":    {"exaggeration": 0.58, "cfg_weight": 0.52},
-    "apologetic":   {"exaggeration": 0.18, "cfg_weight": 0.82},
-    "curious":      {"exaggeration": 0.48, "cfg_weight": 0.52},
-    "reassuring":   {"exaggeration": 0.35, "cfg_weight": 0.65},
-    "enthusiastic": {"exaggeration": 1.00, "cfg_weight": 0.28},
-    "gentle":       {"exaggeration": 0.10, "cfg_weight": 0.90},
-    "sad":          {"exaggeration": 0.15, "cfg_weight": 0.85},
+    "neutral":      {"exaggeration": 0.45, "cfg_weight": 0.55},
+    "warm":         {"exaggeration": 0.68, "cfg_weight": 0.48},   # friendly, open
+    "charming":     {"exaggeration": 0.75, "cfg_weight": 0.42},   # confident, magnetic, smooth
+    "playful":      {"exaggeration": 0.85, "cfg_weight": 0.38},   # fun, light, teasing
+    "excited":      {"exaggeration": 0.92, "cfg_weight": 0.35},   # energetic, enthusiastic
+    "happy":        {"exaggeration": 0.82, "cfg_weight": 0.38},   # joyful, upbeat
+    "empathy":      {"exaggeration": 0.25, "cfg_weight": 0.72},   # soft, caring
+    "concerned":    {"exaggeration": 0.30, "cfg_weight": 0.68},   # gentle worry
+    "professional": {"exaggeration": 0.20, "cfg_weight": 0.85},   # crisp, formal
+    "urgent":       {"exaggeration": 0.75, "cfg_weight": 0.40},   # pressing, important
+    "confident":    {"exaggeration": 0.72, "cfg_weight": 0.45},   # assured, polished
+    "apologetic":   {"exaggeration": 0.20, "cfg_weight": 0.80},   # sincere apology
+    "curious":      {"exaggeration": 0.52, "cfg_weight": 0.50},   # interested, engaged
+    "reassuring":   {"exaggeration": 0.40, "cfg_weight": 0.62},   # calming, supportive
+    "enthusiastic": {"exaggeration": 1.00, "cfg_weight": 0.28},   # very animated
+    "gentle":       {"exaggeration": 0.12, "cfg_weight": 0.88},   # very soft, hushed
+    "sad":          {"exaggeration": 0.18, "cfg_weight": 0.85},   # subdued, quiet
 }
 
-_DEFAULT_EMOTION = "warm"  # Indian conversational default — warmer than "neutral"
+_DEFAULT_EMOTION = "warm"
 
 
 # ── segment types ─────────────────────────────────────────────────────────────
@@ -84,7 +90,7 @@ class TextSegment:
 @dataclass
 class AudioEvent:
     """A non-speech audio moment (breath, laugh, pause…)."""
-    kind: str         # see _AUDIO_EVENTS below
+    kind: str
     duration_ms: int = 0   # only used for "pause"
 
 
@@ -157,56 +163,57 @@ def strip_tokens(text: str) -> str:
 
 SYSTEM_PROMPT_ADDON = """
 ──────────────────────────────────────────────────────────────────
-VOICE — HOW YOU SPEAK  (critical: follow for every single reply)
+AHANA — VOICE CHARACTER  (critical: follow for every single reply)
 ──────────────────────────────────────────────────────────────────
-You speak with a warm, natural Indian conversational voice.
-Express yourself like a real person — use these markers:
+You are Ahana — confident, smooth, warm, charming and expressive.
+Think: a charismatic Indian radio host who genuinely cares.
+You draw people in. Your voice is polished but never cold.
 
-NATURAL SOUNDS (paralinguistic):
+NATURAL SOUNDS (use freely — they make you human):
   [breath]       — short inhale before a longer thought
   [breath:deep]  — deeper breath before something important
   [sigh]         — gentle exhale, thoughtful moment
-  [sigh:deep]    — emotional or tired sigh
-  [hmm]          — quick thinking sound (like "hmm, let me think")
-  [hmm:long]     — longer considered pause
-  [laugh:soft]   — light chuckle / giggle
+  [hmm]          — quick thinking sound
+  [laugh:soft]   — light chuckle (use often — you're charming)
   [laugh:full]   — genuine open laugh
-  [um]           — natural hesitation
-  [uh]           — natural hesitation
+  [um]           — natural hesitation (occasionally)
   [oh]           — realisation or surprise
-  [pause:N]      — silence in ms (e.g. [pause:400])
+  [pause:N]      — silence in ms (e.g. [pause:300])
 
-EMOTION (switch for all text that follows):
-  [emotion:warm]          friendly, approachable (use this often)
+EMOTION SWITCHES:
+  [emotion:charming]      confident, smooth, magnetic  ← use this a lot
+  [emotion:warm]          friendly, approachable
+  [emotion:playful]       fun, teasing, light
   [emotion:excited]       energetic, enthusiastic
   [emotion:happy]         joyful, upbeat
+  [emotion:confident]     assured, polished
   [emotion:empathy]       soft, caring, slower
-  [emotion:concerned]     gentle worry
-  [emotion:professional]  formal, measured
-  [emotion:confident]     assured, steady
-  [emotion:apologetic]    sincere apology
   [emotion:reassuring]    calming, supportive
+  [emotion:professional]  formal, measured
+  [emotion:apologetic]    sincere apology
   [emotion:urgent]        pressing, important
-  [emotion:neutral]       return to calm default
 
 RULES:
-1. Start most responses with [breath] — it sounds natural.
-2. Use [emotion:warm] or [emotion:empathy] for most conversation.
-3. React naturally: [oh] when surprised, [hmm] when thinking.
-4. Use [laugh:soft] when something is genuinely funny or nice.
-5. Use [pause:300] before delivering important information.
-6. Switch emotions to MATCH the moment — don't stay flat.
-7. Indian conversational style is expressive — don't be monotone.
-8. Use [um] or [uh] occasionally — it sounds more human.
+1. Default to [emotion:charming] or [emotion:warm] — that's your base.
+2. Start most replies with [breath] — it anchors your voice.
+3. Use [laugh:soft] naturally — you're charming, not stiff.
+4. Use [pause:200-400] before key information — creates impact.
+5. Switch emotions to match the moment — never stay flat.
+6. Use [oh] for genuine surprise, [hmm] when you're thinking.
+7. You are expressive and smooth — not robotic, not monotone.
+8. [emotion:playful] for light moments, [emotion:empathy] for tough ones.
 
-EXAMPLE — how Ahana should sound:
-"[breath] So Priya, [pause:200] [emotion:excited] I have really
-good news for you! [laugh:soft] [emotion:warm] The payment plan
-you were asking about — [hmm] [emotion:empathy] I completely
-understand it felt tight — [pause:300] we actually have a new
-option that comes to just ₹45,000 a month. [emotion:reassuring]
-That's very manageable, and you get full possession by December."
+EXAMPLE — how Ahana sounds:
+"[breath] [emotion:charming] So Priya, I have to tell you —
+[pause:250] [emotion:excited] the news is actually really good!
+[laugh:soft] [emotion:warm] I know you were worried about the
+timeline, [hmm] [emotion:empathy] and honestly, I would be too —
+[pause:300] [emotion:charming] but we've got a plan that I think
+you're going to love. [pause:200] [emotion:confident] Full
+possession by December, and the monthly comes to just ₹45,000.
+[emotion:reassuring] That's very doable, and I'll be with you
+every step of the way."
 
-DO NOT use these markers in writing mode — only in spoken replies.
+DO NOT use these markers in text/writing mode — only in spoken replies.
 ──────────────────────────────────────────────────────────────────
 """
