@@ -45,7 +45,7 @@ services:
     ports:
       - "8002:8002"
     volumes:
-      - ./voices:/app/voices:ro
+      - ./voices:/app/voices
       - /tmp:/tmp                   # writable scratch for trimmed reference WAVs
     environment:
       TTS_DEVICE: cuda
