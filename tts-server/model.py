@@ -49,9 +49,10 @@ _executor = concurrent.futures.ThreadPoolExecutor(max_workers=settings.max_worke
 # F5-TTS v1 outputs 24 kHz float32; we resample to 8 kHz PCM16 for telephony.
 F5_SAMPLE_RATE = 24_000
 
-# Number of ODE solver steps.  32 = good quality/speed balance on T4.
-# Drop to 16 for ~2x speedup at minor quality cost; raise to 64 for studio.
-NFE_STEP = 32
+# Number of ODE solver steps.
+# 16 = good quality for telephony, ~1.5s latency for a 2-3s sentence on T4.
+# Raise to 32 for slightly better quality if latency budget allows.
+NFE_STEP = 16
 
 # Emotion → F5-TTS speed map (same formula as Kokoro era for API compat).
 _EMOTION_SPEEDS: dict[str, float] = {
@@ -144,6 +145,28 @@ class VoiceModel:
                 ref = d / f"reference.{ext}"
                 if not ref.exists():
                     continue
+
+                # F5-TTS uses torchaudio to load audio. torchaudio handles WAV
+                # natively; MP3/M4A need a codec backend. Convert to WAV once
+                # so every synthesis call uses the simple, reliable WAV path.
+                if ext != "wav":
+                    wav_ref = d / "reference.wav"
+                    if not wav_ref.exists():
+                        logger.info(f"  [{voice_id}] converting {ref.name} -> reference.wav ...")
+                        import subprocess
+                        result = subprocess.run(
+                            ["ffmpeg", "-i", str(ref), "-ac", "1", "-ar", "24000",
+                             str(wav_ref), "-y"],
+                            capture_output=True,
+                        )
+                        if result.returncode != 0:
+                            logger.warning(
+                                f"  [{voice_id}] ffmpeg conversion failed: "
+                                f"{result.stderr.decode()[-200:]}"
+                            )
+                        else:
+                            logger.info(f"  [{voice_id}] WAV conversion done.")
+                    ref = wav_ref if wav_ref.exists() else ref
 
                 ref_text = self._load_ref_text(d)
                 self._voices[voice_id] = {

@@ -17,8 +17,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download F5-TTS model weights at build time so container starts instantly.
-# Uses CPU-only init to avoid needing GPU during docker build.
+# torchcodec is pulled in by f5-tts but is incompatible with PyTorch 2.5.1 on T4
+# (libavutil shared libs mismatch). Remove it so torchaudio falls back to soundfile.
+RUN pip uninstall -y torchcodec || true
+
+# Pre-download F5-TTS + Vocos weights at build time so container starts instantly.
 RUN python3 -c "from f5_tts.api import F5TTS; F5TTS(device='cpu'); print('F5-TTS weights cached.')"
 
 # Application source
